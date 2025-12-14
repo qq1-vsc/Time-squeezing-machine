@@ -19,6 +19,7 @@ from data_manager import (
     get_today_plan, get_all_plans, get_plan_records, update_plan_status,
     get_statistics, export_to_csv
 )
+from config_manager import ConfigManager
 
 # ============================================
 # 页面配置
@@ -156,13 +157,17 @@ st.markdown("""
 # ============================================
 init_database()
 
+# 初始化配置管理器
+if 'config_manager' not in st.session_state:
+    st.session_state.config_manager = ConfigManager()
+
 def init_session_state():
     if 'client' not in st.session_state:
         st.session_state.client = None
     if 'api_configured' not in st.session_state:
         st.session_state.api_configured = False
     if 'api_key' not in st.session_state:
-        st.session_state.api_key = ""
+        st.session_state.api_key = st.session_state.config_manager.get_api_key()
     if 'plan' not in st.session_state:
         st.session_state.plan = ""
     if 'optimized_plan' not in st.session_state:
@@ -181,14 +186,22 @@ def init_session_state():
         st.session_state.plan_data = None
     if 'current_plan_id' not in st.session_state:
         st.session_state.current_plan_id = None
+    # 新增：任务级时间追踪
+    if 'task_start_times' not in st.session_state:
+        st.session_state.task_start_times = {}  # {task_idx: start_time}
+    if 'task_times' not in st.session_state:
+        st.session_state.task_times = {}  # {task_idx: actual_time}
 
 init_session_state()
 
 # ============================================
 # DeepSeek API 配置
 # ============================================
+# ============================================
+# DeepSeek API 配置
+# ============================================
 def configure_deepseek(api_key: str) -> bool:
-    """配置 DeepSeek API"""
+    """配置 DeepSeek API 并保存到本地"""
     try:
         client = OpenAI(
             api_key=api_key,
@@ -202,11 +215,31 @@ def configure_deepseek(api_key: str) -> bool:
         st.session_state.client = client
         st.session_state.api_configured = True
         st.session_state.api_key = api_key
+        # 保存到配置文件
+        st.session_state.config_manager.set_api_key(api_key)
+        st.success("✅ API Key 已保存，下次无需重复输入")
         return True
     except Exception as e:
         st.error(f"❌ API 配置失败: {str(e)}")
         st.session_state.api_configured = False
         return False
+
+def auto_configure_deepseek():
+    """自动加载已保存的 API Key"""
+    api_key = st.session_state.config_manager.get_api_key()
+    if api_key:
+        try:
+            client = OpenAI(
+                api_key=api_key,
+                base_url="https://api.deepseek.com"
+            )
+            st.session_state.client = client
+            st.session_state.api_configured = True
+            st.session_state.api_key = api_key
+            return True
+        except:
+            return False
+    return False
 
 def call_deepseek(messages: list, temperature=0.7) -> str:
     """调用 DeepSeek API"""
@@ -318,27 +351,44 @@ with st.sidebar:
     
     st.markdown("### 🔌 API 配置")
     
-    api_key_input = st.text_input(
-        "DeepSeek API Key",
-        type="password",
-        value=st.session_state.api_key,
-        help="从 platform.deepseek.com 获取"
-    )
+    # 尝试自动加载已保存的 API Key
+    if not st.session_state.api_configured:
+        auto_configure_deepseek()
     
-    if st.button("🚀 启动系统", use_container_width=True):
-        if api_key_input:
-            with st.spinner("系统启动中..."):
-                if configure_deepseek(api_key_input):
-                    st.success("✅ 系统就绪！")
-                else:
-                    st.error("❌ 启动失败")
-        else:
-            st.warning("请输入 API Key")
-    
+    # 显示当前状态
     if st.session_state.api_configured:
-        st.markdown("🟢 **系统: 激活**")
+        st.markdown("🟢 **系统: 激活** (已加载保存的 API Key)")
+        if st.button("🔄 更新 API Key", use_container_width=True, type="secondary"):
+            st.session_state.show_api_config = True
     else:
-        st.markdown("🔴 **系统: 待激活**")
+        st.markdown("🔴 **系统: 待激活** (需要 API Key)")
+        st.session_state.show_api_config = True
+    
+    # API Key 配置面板
+    if st.session_state.get('show_api_config', not st.session_state.api_configured):
+        with st.expander("📝 API Key 配置", expanded=not st.session_state.api_configured):
+            st.markdown("""
+            获取 API Key:
+            1. 访问 https://platform.deepseek.com
+            2. 登录后找到 API Keys
+            3. 复制你的密钥
+            """)
+            
+            api_key_input = st.text_input(
+                "输入 DeepSeek API Key",
+                type="password",
+                value=st.session_state.api_key if not st.session_state.api_configured else "",
+                help="API Key 将被保存在本地配置文件"
+            )
+            
+            if st.button("✅ 保存并测试", use_container_width=True, type="primary"):
+                if api_key_input:
+                    with st.spinner("验证中..."):
+                        if configure_deepseek(api_key_input):
+                            st.session_state.show_api_config = False
+                            st.rerun()
+                else:
+                    st.warning("请输入 API Key")
     
     st.markdown("---")
     st.markdown("### 📚 计划管理")
@@ -386,6 +436,12 @@ st.markdown("""
     <p style="color: #888; font-size: 0.9em;">"每一秒都用于成长，没有任何浪费"</p>
 </div>
 """, unsafe_allow_html=True)
+
+# ============================================
+# 检查 API 配置
+# ============================================
+if not st.session_state.api_configured:
+    st.warning("⚠️ 系统未激活，请在左侧边栏配置 API Key 以启动系统")
 
 # ============================================
 # Tab 分区
@@ -587,12 +643,27 @@ with tab2:
                 """, unsafe_allow_html=True)
             
             # ============================================
-            # 当前任务详情
+            # 当前任务详情（带状态指示）
             # ============================================
             st.markdown("---")
+            
+            # 判断任务状态
+            if task_remaining > 0:
+                status_text = "进行中 ⏳"
+                status_color = "#00ff88"
+            elif task_remaining == 0:
+                status_text = "时间已尽 ⚠️"
+                status_color = "#ffaa00"
+            else:
+                status_text = f"超时 {int(abs(task_remaining) // 60)}m {int(abs(task_remaining) % 60)}s 🔴"
+                status_color = "#ff4444"
+            
             st.markdown(f"""
             <div class="task-card task-active">
                 <h2 style="margin: 0; color: #00ffff;">{current_task['name']}</h2>
+                <p style="color: {status_color}; font-size: 1em; margin: 10px 0; font-weight: bold;">
+                    {status_text}
+                </p>
                 <p style="color: #00ff88; font-size: 1.1em; margin: 10px 0;">
                     💪 专注度要求: {current_task['focus']}/10
                 </p>
@@ -606,11 +677,27 @@ with tab2:
             """, unsafe_allow_html=True)
             
             # ============================================
-            # 当前任务进度条
+            # 当前任务进度条 + 详细时间信息
             # ============================================
             st.markdown("### ⏱️ 当前任务进度")
             st.progress(min(task_progress, 1.0))
-            st.caption(f"已用: {int(task_elapsed // 60)}m {int(task_elapsed % 60)}s / 总计: {current_task['minutes']}m")
+            
+            # 显示时间状态
+            if task_remaining > 0:
+                time_status = f"还剩 {int(task_remaining // 60)}m {int(task_remaining % 60)}s"
+                time_color = "✅"
+            elif task_remaining > -300:  # 超时5分钟以内
+                time_status = f"已超时 {int(abs(task_remaining) // 60)}m {int(abs(task_remaining) % 60)}s"
+                time_color = "⚠️"
+            else:
+                time_status = f"严重超时 {int(abs(task_remaining) // 60)}m {int(abs(task_remaining) % 60)}s"
+                time_color = "🔴"
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.caption(f"已用: {int(task_elapsed // 60)}m {int(task_elapsed % 60)}s")
+            with col2:
+                st.caption(f"{time_color} {time_status}")
             
             # ============================================
             # 总体进度条
@@ -643,18 +730,36 @@ with tab2:
                     """, unsafe_allow_html=True)
             
             # ============================================
-            # 任务导航
+            # 任务导航和控制
             # ============================================
             st.markdown("---")
+            
+            # 显示任务开始/完成时间统计
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                if current_idx > 0 and st.button("⏮️ 上一个任务"):
+                if current_idx > 0 and st.button("⏮️ 上一个任务", use_container_width=True):
                     st.session_state.current_task_idx -= 1
                     st.rerun()
+                elif current_idx == 0:
+                    st.button("⏮️ 上一个任务", use_container_width=True, disabled=True)
             
             with col2:
-                if st.button("✅ 完成当前任务"):
+                # 任务完成按钮 - 带状态指示
+                completion_text = "✅ 完成任务"
+                completion_type = "primary"
+                
+                if st.button(completion_text, use_container_width=True, type=completion_type):
+                    # 计算时间差异
+                    time_diff = task_remaining
+                    
+                    if time_diff > 0:
+                        st.success(f"⭐ 提前完成！节省了 {int(abs(time_diff) // 60)}m {int(abs(time_diff) % 60)}s")
+                    elif time_diff >= -60:
+                        st.info(f"⏱️ 按时完成")
+                    else:
+                        st.warning(f"⚠️ 超时完成，超出 {int(abs(time_diff) // 60)}m {int(abs(time_diff) % 60)}s")
+                    
                     # 保存任务记录
                     if st.session_state.current_plan_id:
                         save_task_record(
@@ -666,16 +771,21 @@ with tab2:
                             completed=True
                         )
                     
+                    # 时间数据记录
+                    st.session_state.task_times[current_idx] = int(task_elapsed // 60)
+                    
+                    time.sleep(1)  # 显示提示信息
+                    
                     if current_idx < len(tasks) - 1:
                         st.session_state.current_task_idx += 1
-                        st.info(f"✅ 任务完成！进入下一个任务")
+                        st.rerun()
                     else:
                         # 标记计划完成
                         if st.session_state.current_plan_id:
                             update_plan_status(st.session_state.current_plan_id, 'completed')
                         st.session_state.executing = False
                         st.success(f"🎉 所有任务完成！总耗时: {int(elapsed_seconds // 60)} 分钟")
-                    st.rerun()
+                        st.rerun()
             
             with col3:
                 if st.button("⏹️ 停止执行"):
