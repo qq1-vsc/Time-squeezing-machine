@@ -322,10 +322,10 @@ def get_task_suggestion(task: dict, elapsed_seconds: int, total_seconds: int) ->
     system_prompt = f"""你是一个极端激励的时间教练。用户正在执行一个高强度学习计划。
 
 当前进度: {progress*100:.0f}%
-已用时间: {elapsed_seconds//60}分{elapsed_seconds%60}秒
+已用时间: {int(elapsed_seconds//60)}分{int(elapsed_seconds%60)}秒
 当前任务: {task['name']}
 剩余时间: {task['minutes']}分钟
-专注度要求: {task['focus']}/10
+专注度要求: {task.get('focus', 5)}/10
 
 根据进度给出实时激励和建议。语言要冷酷、直接、充满压力感(参考刘慈欣)。"""
     
@@ -515,7 +515,7 @@ with tab1:
             """, unsafe_allow_html=True)
         
         with col3:
-            s_count = sum(1 for t in plan_data['tasks'] if t['priority'] == 'S')
+            s_count = sum(1 for t in plan_data['tasks'] if t.get('priority', 'B') == 'S')
             st.markdown(f"""
             <div class="metric-extreme">
                 <div class="metric-value">{s_count}</div>
@@ -524,7 +524,7 @@ with tab1:
             """, unsafe_allow_html=True)
         
         with col4:
-            avg_focus = sum(int(t['focus']) for t in plan_data['tasks']) / len(plan_data['tasks'])
+            avg_focus = sum(int(t.get('focus', 5)) for t in plan_data['tasks']) / len(plan_data['tasks']) if plan_data['tasks'] else 5
             st.markdown(f"""
             <div class="metric-extreme">
                 <div class="metric-value">{avg_focus:.1f}</div>
@@ -532,39 +532,40 @@ with tab1:
             </div>
             """, unsafe_allow_html=True)
         
-        # 显示激励语
+        # 显示激励语（兼容旧数据）
+        motivation = plan_data.get('motivation', '时间压榨机器启动，全力以赴！')
         st.markdown(f"""
         <div style="background: linear-gradient(145deg, #1a1a3e, #2a1050); 
                     border: 2px solid #00ff88; border-radius: 15px; padding: 20px; 
                     margin: 20px 0; text-align: center;">
             <p style="color: #00ff88; font-size: 1.2em; font-style: italic;">
-                "{plan_data['motivation']}"
+                "{motivation}"
             </p>
         </div>
         """, unsafe_allow_html=True)
         
-        # 显示任务列表
+        # 显示任务列表（带序号和状态）
         st.markdown("## 📋 任务明细")
         
-        for task in plan_data['tasks']:
+        for idx, task in enumerate(plan_data['tasks']):
             priority_colors = {"S": "🔴", "A": "🟠", "B": "🟡"}
-            priority_emoji = priority_colors.get(task['priority'], "⚪")
+            priority_emoji = priority_colors.get(task.get('priority', 'B'), "⚪")
             
             st.markdown(f"""
             <div class="task-card">
                 <div style="display: flex; justify-content: space-between; align-items: start;">
                     <div style="flex: 1;">
                         <h3 style="margin: 0; color: #00ff88;">
-                            {priority_emoji} {task['name']}
+                            任务 {idx + 1} | {priority_emoji} {task['name']}
                         </h3>
                         <p style="color: #888; margin: 5px 0; font-size: 0.9em;">
-                            ⏱️ {task['minutes']}分 | 💪 专注度: {task['focus']}/10
+                            ⏱️ {task['minutes']}分 | 💪 专注度: {task.get('focus', 5)}/10
                         </p>
                         <p style="color: #00ffaa; margin: 10px 0; font-size: 0.95em;">
-                            📍 {task['method']}
+                            📍 {task.get('method', '集中完成')}
                         </p>
                         <p style="color: #ffaa00; margin: 0; font-size: 0.85em;">
-                            ⚠️ {task['warning']}
+                            ⚠️ {task.get('warning', '保持专注')}
                         </p>
                     </div>
                 </div>
@@ -602,14 +603,15 @@ with tab2:
             elapsed = time.time() - st.session_state.start_time
             elapsed_seconds = int(elapsed)
             
-            # 计算当前任务的剩余时间
+            # 计算当前任务的剩余时间（允许负值表示超时）
             task_start_seconds = sum(t['minutes'] * 60 for t in tasks[:current_idx])
             task_elapsed = elapsed_seconds - task_start_seconds
-            task_remaining = max(0, current_task['minutes'] * 60 - task_elapsed)
-            task_progress = 1.0 - (task_remaining / (current_task['minutes'] * 60)) if current_task['minutes'] > 0 else 0
+            task_total_seconds = current_task['minutes'] * 60
+            task_remaining = task_total_seconds - task_elapsed  # 允许负值
+            task_progress = task_elapsed / task_total_seconds if task_total_seconds > 0 else 1.0
             
             # 总体进度
-            total_progress = elapsed_seconds / st.session_state.total_seconds
+            total_progress = elapsed_seconds / st.session_state.total_seconds if st.session_state.total_seconds > 0 else 0
             
             # ============================================
             # 计时器显示（根据阶段改变风格）
@@ -617,20 +619,29 @@ with tab2:
             col1, col2 = st.columns([2, 1])
             
             with col1:
-                minutes = task_remaining // 60
-                seconds = task_remaining % 60
+                # 处理负计时（超时情况）
+                if task_remaining >= 0:
+                    minutes = int(task_remaining // 60)
+                    seconds = int(task_remaining % 60)
+                    time_display = f"{minutes:02d}:{seconds:02d}"
+                else:
+                    # 超时：显示负时间
+                    abs_remaining = abs(task_remaining)
+                    minutes = int(abs_remaining // 60)
+                    seconds = int(abs_remaining % 60)
+                    time_display = f"-{minutes:02d}:{seconds:02d}"
                 
                 # 根据剩余时间选择样式
-                if task_remaining > current_task['minutes'] * 60 * 0.5:
+                if task_remaining > task_total_seconds * 0.5:
                     timer_class = "timer-display"
-                elif task_remaining > current_task['minutes'] * 60 * 0.2:
+                elif task_remaining > task_total_seconds * 0.2:
                     timer_class = "timer-display timer-warning"
                 else:
                     timer_class = "timer-display timer-danger"
                 
                 st.markdown(f"""
                 <div class="{timer_class}">
-                    {minutes:02d}:{seconds:02d}
+                    {time_display}
                 </div>
                 """, unsafe_allow_html=True)
             
@@ -651,12 +662,17 @@ with tab2:
             if task_remaining > 0:
                 status_text = "进行中 ⏳"
                 status_color = "#00ff88"
-            elif task_remaining == 0:
+            elif task_remaining > -60:
                 status_text = "时间已尽 ⚠️"
                 status_color = "#ffaa00"
             else:
                 status_text = f"超时 {int(abs(task_remaining) // 60)}m {int(abs(task_remaining) % 60)}s 🔴"
                 status_color = "#ff4444"
+            
+            # 使用 get 方法安全访问字段
+            focus_level = current_task.get('focus', 5)
+            method = current_task.get('method', '集中完成')
+            warning = current_task.get('warning', '保持专注')
             
             st.markdown(f"""
             <div class="task-card task-active">
@@ -665,13 +681,13 @@ with tab2:
                     {status_text}
                 </p>
                 <p style="color: #00ff88; font-size: 1.1em; margin: 10px 0;">
-                    💪 专注度要求: {current_task['focus']}/10
+                    💪 专注度要求: {focus_level}/10
                 </p>
                 <p style="color: #00ffaa; font-size: 1em; margin: 10px 0;">
-                    📍 {current_task['method']}
+                    📍 {method}
                 </p>
                 <p style="color: #ffaa00; font-size: 0.95em; margin: 10px 0;">
-                    ⚠️ {current_task['warning']}
+                    ⚠️ {warning}
                 </p>
             </div>
             """, unsafe_allow_html=True)
@@ -720,12 +736,13 @@ with tab2:
                 # 只显示接下来的 3 个任务
                 for i in range(current_idx + 1, min(current_idx + 4, len(tasks))):
                     task = tasks[i]
+                    focus = task.get('focus', 5)
                     st.markdown(f"""
                     <div style="background: rgba(0, 255, 136, 0.05); border-left: 3px solid #00ff88; 
                                 padding: 10px 15px; margin: 10px 0; border-radius: 5px;">
                         <p style="color: #888; margin: 0; font-size: 0.9em;">任务 {i+1}</p>
                         <p style="color: #00ff88; margin: 5px 0; font-weight: bold;">{task['name']}</p>
-                        <p style="color: #666; margin: 0; font-size: 0.85em;">⏱️ {task['minutes']}分 | 💪 {task['focus']}/10</p>
+                        <p style="color: #666; margin: 0; font-size: 0.85em;">⏱️ {task['minutes']}分 | 💪 {focus}/10</p>
                     </div>
                     """, unsafe_allow_html=True)
             
@@ -767,7 +784,7 @@ with tab2:
                             task_name=current_task['name'],
                             scheduled_min=current_task['minutes'],
                             actual_min=int(task_elapsed // 60),
-                            focus_level=current_task['focus'],
+                            focus_level=current_task.get('focus', 5),
                             completed=True
                         )
                     
@@ -815,9 +832,9 @@ with tab2:
                 try:
                     system_prompt = f"""你是一个激进的时间教练和学习顾问。
 当前任务: {current_task['name']}
-已用时间: {elapsed_seconds//60}分{elapsed_seconds%60}秒
-剩余时间: {task_remaining//60}分{task_remaining%60}秒
-专注度要求: {current_task['focus']}/10
+已用时间: {int(elapsed_seconds//60)}分{int(elapsed_seconds%60)}秒
+剩余时间: {int(task_remaining//60)}分{int(abs(task_remaining)%60)}秒
+专注度要求: {current_task.get('focus', 5)}/10
 
 用户的要求: {user_message}
 
@@ -875,7 +892,7 @@ with tab3:
                 st.markdown("### 优先级分布")
                 priority_counts = {}
                 for task in tasks:
-                    p = task['priority']
+                    p = task.get('priority', 'B')
                     priority_counts[p] = priority_counts.get(p, 0) + 1
                 
                 fig = go.Figure(data=[go.Pie(
@@ -922,11 +939,11 @@ with tab3:
                 st.metric("平均任务时长", f"{avg_time:.0f}min")
             
             with col2:
-                avg_focus = sum(int(t['focus']) for t in tasks) / len(tasks)
+                avg_focus = sum(int(t.get('focus', 5)) for t in tasks) / len(tasks) if tasks else 5
                 st.metric("平均专注度", f"{avg_focus:.1f}/10")
             
             with col3:
-                s_tasks = len([t for t in tasks if t['priority'] == 'S'])
+                s_tasks = len([t for t in tasks if t.get('priority', 'B') == 'S'])
                 st.metric("核心任务数", s_tasks)
             
             with col4:
